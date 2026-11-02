@@ -72,3 +72,32 @@ services:
     binds:
       - /lzcapp/var/storage:/app/storage
       - /lzcapp/var/workdir:/tmp/kestra-wd
+
+usage: |
+  Kestra 是工作流编排平台：用 YAML 声明流水线，定时或事件触发，网页查看执行历史。
+
+  使用方法：
+  1. 打开应用，浏览器会弹出登录框，用你安装时设置的用户名和密码登录。
+  2. 在左侧"Flows"里新建流程，用 YAML 描述要执行的任务链，例如：
+       id: hello
+       namespace: company.team
+       tasks:
+         - id: log
+           type: io.kestra.plugin.core.log.Log
+           message: hello world
+  3. 保存后点"Execute"运行，或加 triggers 让它定时/按事件自动跑。
+  4. 每次执行都会留下日志和产出，可以在界面里回看。
+
+  数据与安全：
+  - 流程定义、执行记录和文件产出都在 PostgreSQL（/lzcapp/var/pgdata）与 /lzcapp/var/storage，
+    卸载应用会一并删除，请定期备份。
+  - 网页界面由你设置的用户名和密码保护（basic-auth），密码默认随机生成，不存在内置弱口令。
+  - 数据库密码与加密密钥由平台稳定密钥生成，每个部署不同；请勿改动，否则已加密的数据读不出来。
+  - 应用经懒猫入口鉴权访问。
+
+  说明：
+  - 两个容器：Kestra + PostgreSQL 18。首次启动要建表，打开可能需要等一会儿。
+  - **本包不挂载宿主机 Docker，因此不能执行容器化的任务**（官方 compose 会挂 docker.sock）。
+    内置的脚本类、HTTP、数据库等任务正常可用。
+  - 首次启动会自动建库并执行迁移，请耐心等待界面出现。
+  - 未做真机验证：登录、新建流程、执行任务以及重启后持久化均未在设备上实测。
