@@ -1,0 +1,151 @@
+name: Verify Kestra Release on GitHub
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to verify
+        required: false
+        default: v2.0.8
+permissions:
+  contents: read
+concurrency:
+  group: kestra-release-verification
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then TAG="$(gh release view --json tagName --jq .tagName)"; fi
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Download exact Release asset on runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ASSET_NAME="community.lazycat.app.kestra-${RELEASE_TAG}.lpk"
+          echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+          gh release view "$RELEASE_TAG" --json tagName,assets > release-metadata.json
+          gh release download "$RELEASE_TAG" --pattern "$ASSET_NAME" --dir verify-pkg
+
+      - name: Verify package contents
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, re, tarfile, yaml
+
+          tag = os.environ['RELEASE_TAG']
+          name = os.environ['ASSET_NAME']
+          pkg = __import__('pathlib').Path('verify-pkg') / name
+          assert pkg.is_file(), pkg
+
+          h = hashlib.sha256()
+          with pkg.open('rb') as fh:
+              for chunk in iter(lambda: fh.read(1 << 20), b''):
+                  h.update(chunk)
+
+          with tarfile.open(pkg, 'r:') as package:
+              members = package.getnames()
+              for required in ('manifest.yml', 'package.yml', 'content.tar', 'icon.png'):
+                  assert required in members, (required, members)
+
+              info = yaml.safe_load(package.extractfile('package.yml').read())
+              assert info['package'] == 'community.lazycat.app.kestra', info['package']
+              assert info['name'] == 'Kestra', info['name']
+              assert info['version'] == tag.lstrip('v'), (info['version'], tag)
+              assert info['license'] == 'Apache-2.0', info['license']
+              assert info['min_os_version'] == '1.5.0', info['min_os_version']
+
+              raw = package.extractfile('manifest.yml').read().decode()
+              m = yaml.safe_load(raw)
+              app = m['application']
+              assert app['subdomain'] == 'kestra', app['subdomain']
+              ups = app['upstreams']
+              assert any(u['location'] == '/' and u['backend'] == 'http://kestra:8080/' for u in ups), ups
+              for u in ups:
+                  b = u.get('backend') or ''
+                  assert 'db:' not in b, b
+
+              svcs = m['services']
+              assert set(svcs) == {'kestra', 'db'}, set(svcs)
+
+              k = svcs['kestra']
+              assert 'kestra/kestra' in k['image'], k['image']
+              assert k['image'].endswith(':' + tag), k['image']
+
+              # default command is just --help; the server must be started explicitly
+              assert k['command'] == ['server', 'standalone'], k['command']
+
+              # the whole config arrives as one YAML blob; confirm it is a block
+              # scalar (a plain scalar would let the indented lines parse as a mapping)
+              cfg_entries = [e for e in k['environment']
+                             if isinstance(e, str) and e.startswith('KESTRA_CONFIGURATION=')]
+              assert len(cfg_entries) == 1, cfg_entries
+              inner = cfg_entries[0].split('=', 1)[1]
+              cfg = yaml.safe_load(inner)
+              assert isinstance(cfg, dict), type(cfg)
+              assert 'kestra' in cfg and 'datasources' in cfg, list(cfg)
+
+              ks = cfg['kestra']
+              assert 'repository' in ks and 'queue' in ks, list(ks)
+              assert 'storage' in ks and ks['storage'].get('type') == 'local', ks.get('storage')
+              assert 'encryption' in ks and 'secret-key' in ks['encryption'], ks.get('encryption')
+              # UI basic auth must be present
+              ba = (ks.get('server') or {}).get('basic-auth') or {}
+              assert set(ba) >= {'username', 'password'}, ba
+              # rendered values must be quoted in the source so ':' or '#' in a
+              # password cannot break the embedded YAML
+              assert re.search(r'username:\s+"', raw), 'basic-auth username not quoted'
+              assert re.search(r'password:\s+"', raw), 'basic-auth password not quoted'
+
+              env = ' '.join(str(x) for x in k['environment'])
+              assert 'stable_secret' in env, env
+
+              # we deliberately do NOT mount the host docker socket
+              assert 'docker.sock' not in raw, 'docker socket must not be mounted'
+
+              binds = k['binds']
+              assert any(b.endswith(':/app/storage') for b in binds), binds
+              assert any(b.endswith(':/tmp/kestra-wd') for b in binds), binds
+
+              db = svcs['db']
+              # PostgreSQL 18 keeps data directly under /var/lib/postgresql
+              assert '18' in db['image'], db['image']
+              assert any(b.endswith(':/var/lib/postgresql') for b in db['binds']), db['binds']
+              assert 'healthcheck' in db
+
+              params = yaml.safe_load(package.extractfile('deploy_params.yml').read())
+              by_id = {q['id']: q for q in params['params']}
+              assert set(by_id) == {'admin_username', 'admin_password'}, set(by_id)
+              assert by_id['admin_password']['type'] == 'secret'
+              assert 'random' in str(by_id['admin_password'].get('default_value', ''))
+
+              assert 'healthcheck' not in k, k
+              assert 'lzc-file-chooser' not in raw
+
+              with tarfile.open(fileobj=package.extractfile('content.tar')) as content:
+                  cmembers = content.getnames()
+                  lic = [n for n in cmembers if 'licenses/' in n]
+                  assert lic, cmembers
+                  main_lic = [n for n in lic if n.endswith('/LICENSE')]
+                  target = main_lic[0] if main_lic else lic[0]
+                  license_text = content.extractfile(target).read().decode()
+              assert 'Apache License' in license_text and 'Version 2.0' in license_text
+
+          result = {
+              'verified': True,
+              'tag': tag,
+              'sha256': h.hexdigest(),
+              'size': pkg.stat().st_size,
+              'runtime_tested': False,
+              'note': 'embedded KESTRA_CONFIGURATION verified as parseable YAML; docker.sock intentionally not mounted',
+          }
+          print(json.dumps(result))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write('```json\n' + json.dumps(result, indent=2) + '\n```\n')
+          PY
