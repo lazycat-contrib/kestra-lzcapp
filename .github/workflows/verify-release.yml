@@ -81,25 +81,41 @@ jobs:
               # default command is just --help; the server must be started explicitly
               assert k['command'] == ['server', 'standalone'], k['command']
 
-              # the whole config arrives as one YAML blob; confirm it is a block
-              # scalar (a plain scalar would let the indented lines parse as a mapping)
+              # The whole config arrives as one YAML blob. Do NOT yaml.load it:
+              # values keep Go template syntax after packaging and PyYAML's
+              # scanner trips on it, while js-yaml accepts the same text.
+              # Assert on structure and required keys instead.
               cfg_entries = [e for e in k['environment']
                              if isinstance(e, str) and e.startswith('KESTRA_CONFIGURATION=')]
               assert len(cfg_entries) == 1, cfg_entries
               inner = cfg_entries[0].split('=', 1)[1]
-              cfg = yaml.safe_load(inner)
-              assert isinstance(cfg, dict), type(cfg)
-              assert 'kestra' in cfg and 'datasources' in cfg, list(cfg)
+              assert isinstance(inner, str), type(inner)
+              assert inner.startswith('datasources:'), inner[:40]
 
-              ks = cfg['kestra']
-              assert 'repository' in ks and 'queue' in ks, list(ks)
-              assert 'storage' in ks and ks['storage'].get('type') == 'local', ks.get('storage')
-              assert 'encryption' in ks and 'secret-key' in ks['encryption'], ks.get('encryption')
-              # UI basic auth must be present
-              ba = (ks.get('server') or {}).get('basic-auth') or {}
-              assert set(ba) >= {'username', 'password'}, ba
-              # rendered values must be quoted in the source so ':' or '#' in a
-              # password cannot break the embedded YAML
+              def indented(text, key, depth):
+                  """True if `key:` appears with the exact leading indentation."""
+                  pad = ' ' * depth
+                  return any(line.startswith(pad + key + ':')
+                             for line in text.splitlines())
+
+              # top-level sections
+              assert indented(inner, 'datasources', 0), 'datasources missing'
+              assert indented(inner, 'kestra', 0), 'kestra missing'
+              # datasource connection
+              assert indented(inner, 'url', 4) and 'jdbc:postgresql://db:5432/kestra' in inner
+              assert indented(inner, 'driverClassName', 4)
+              # kestra sub-sections
+              for key in ('repository', 'queue', 'storage', 'tasks', 'encryption', 'server'):
+                  assert indented(inner, key, 2), f'{key} missing under kestra'
+              assert 'type: local' in inner, 'local storage type missing'
+              assert 'base-path: /app/storage' in inner, 'storage base-path missing'
+              assert indented(inner, 'secret-key', 4), 'encryption secret-key missing'
+              assert indented(inner, 'basic-auth', 4), 'server basic-auth missing'
+              assert indented(inner, 'username', 6), 'basic-auth username missing'
+              assert indented(inner, 'password', 6), 'basic-auth password missing'
+
+              # rendered values must be quoted so ':' or '#' in a password
+              # cannot break the embedded YAML
               assert re.search(r'username:\s+"', raw), 'basic-auth username not quoted'
               assert re.search(r'password:\s+"', raw), 'basic-auth password not quoted'
 
