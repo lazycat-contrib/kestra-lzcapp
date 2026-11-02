@@ -122,8 +122,11 @@ jobs:
               env = ' '.join(str(x) for x in k['environment'])
               assert 'stable_secret' in env, env
 
-              # we deliberately do NOT mount the host docker socket
-              assert 'docker.sock' not in raw, 'docker socket must not be mounted'
+              # We deliberately do NOT mount the host docker socket. Scope this
+              # to the binds only: the usage text mentions docker.sock in prose.
+              for svc_name, svc in svcs.items():
+                  for b in svc.get('binds', []) or []:
+                      assert 'docker.sock' not in b, (svc_name, b)
 
               binds = k['binds']
               assert any(b.endswith(':/app/storage') for b in binds), binds
@@ -143,6 +146,14 @@ jobs:
 
               assert 'healthcheck' not in k, k
               assert 'lzc-file-chooser' not in raw
+
+              # a package must ship usage text, and it must say the app was not
+              # verified on a real device
+              assert 'usage' in m and str(m['usage']).strip(), 'usage section missing'
+              # wording varies between packages; accept either spelling of
+              # the "not tested on a device" disclaimer
+              usage_text = str(m['usage'])
+              assert ('真机验证' in usage_text or '实机验证' in usage_text), 'usage must state no device test'
 
               with tarfile.open(fileobj=package.extractfile('content.tar')) as content:
                   cmembers = content.getnames()
