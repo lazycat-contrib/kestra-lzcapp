@@ -1,0 +1,74 @@
+application:
+  subdomain: kestra
+  multi_instance: false
+  upstreams:
+    - location: /package-licenses/
+      backend: file:///lzcapp/pkg/content/licenses/
+    - location: /
+      backend: http://kestra:8080/
+
+services:
+  db:
+    image: docker.1ms.run/library/postgres:18
+    environment:
+      - POSTGRES_DB=kestra
+      - POSTGRES_USER=kestra
+      - |-
+        POSTGRES_PASSWORD={{ stable_secret "kestra_db_password" | replace "\r" "" | replace "\n" "" }}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U kestra -d kestra
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    binds:
+      # PostgreSQL 18 keeps data directly under /var/lib/postgresql
+      # (earlier majors used a versioned subdirectory).
+      - /lzcapp/var/pgdata:/var/lib/postgresql
+
+  kestra:
+    # upstream: kestra/kestra:v2.0.8
+    image: docker.1ms.run/kestra/kestra:v2.0.8
+    depends_on:
+      - db
+    # The image's default command is only --help, so the server must be
+    # started explicitly.
+    command:
+      - server
+      - standalone
+    environment:
+      # Kestra reads one blob of YAML from this variable. It must be a block
+      # scalar: written as a plain scalar the following indented lines would be
+      # parsed as a nested mapping instead of a string.
+      - |-
+        KESTRA_CONFIGURATION=datasources:
+          postgres:
+            url: jdbc:postgresql://db:5432/kestra
+            driverClassName: org.postgresql.Driver
+            username: kestra
+            password: {{ stable_secret "kestra_db_password" | replace "\r" "" | replace "\n" "" }}
+        kestra:
+          repository:
+            type: postgres
+          queue:
+            type: postgres
+          storage:
+            type: local
+            local:
+              base-path: /app/storage
+          tasks:
+            tmp-dir:
+              path: /tmp/kestra-wd/tmp
+          url: https://{{ .S.AppDomain }}/
+          encryption:
+            secret-key: {{ stable_secret "kestra_encryption_key" | replace "\r" "" | replace "\n" "" }}
+          server:
+            basic-auth:
+              username: "{{ .U.admin_username }}"
+              password: "{{ .U.admin_password }}"
+      - TZ=Asia/Shanghai
+    binds:
+      - /lzcapp/var/storage:/app/storage
+      - /lzcapp/var/workdir:/tmp/kestra-wd

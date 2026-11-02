@@ -1,0 +1,18 @@
+package: community.lazycat.app.kestra
+name: Kestra
+version: 0.0.0
+description: "Workflow orchestration: declare pipelines in YAML and schedule them, with a web UI."
+min_os_version: "1.5.0"
+homepage: https://kestra.io/
+author: Kestra Technologies
+license: Apache-2.0
+permissions:
+  required:
+    - net.internet
+locales:
+  zh:
+    name: Kestra
+    description: "工作流编排平台：用 YAML 声明流水线，定时或事件触发，网页查看执行历史。"
+  en:
+    name: Kestra
+    description: "Workflow orchestration: declare pipelines in YAML and schedule them, with a web UI."
