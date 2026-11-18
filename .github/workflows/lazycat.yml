@@ -1,6 +1,11 @@
 name: Build Kestra LPK
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: '指定版本发布（如 2.0.11）；留空检查上游更新'
+        type: string
+        required: false
 permissions:
   contents: write
   pull-requests: write
@@ -13,6 +18,7 @@ jobs:
     with:
       operation: auto
       config: .github/lazycat-action.yml
+      version: ${{ inputs.version || '' }}
       versioned-release-asset: true
     secrets:
       LZC_API_TOKEN: ${{ secrets.LZC_API_TOKEN }}
