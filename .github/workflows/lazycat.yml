@@ -1,5 +1,8 @@
 name: Build Kestra LPK
 on:
+  schedule:
+    # 每天定时检查上游 kestra/kestra 的 vX.Y.Z 新版本并自动复制镜像、发布到喵喵商店
+    - cron: '23 3 * * *'
   workflow_dispatch:
     inputs:
       version:
