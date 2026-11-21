@@ -31,8 +31,8 @@ services:
       # (earlier majors used a versioned subdirectory).
       - /lzcapp/var/pgdata:/var/lib/postgresql
   kestra:
-    # upstream: kestra/kestra:v2.0.11
-    image: docker.1ms.run/kestra/kestra:v2.0.11
+    # upstream: kestra/kestra:v2.0.12
+    image: docker.1ms.run/kestra/kestra:v2.0.12
     depends_on:
       - db
     # The image's default command is only --help, so the server must be
